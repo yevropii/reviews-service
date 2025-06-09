@@ -1,0 +1,84 @@
+name: "reviews-service"
+
+services:
+  # ---------- PostgreSQL ----------
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: reviews-service
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d reviews-service"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Jaeger ----------
+  jaeger:
+    image: jaegertracing/all-in-one:1.48
+    environment:
+      - LOG_LEVEL=debug
+    ports:
+      - "16686:16686"   # UI
+      - "4318:4318"     # OTLP HTTP
+      - "6831:6831/udp"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:16686"]
+      interval: 10s
+      retries: 5
+
+  # ---------- Prometheus ----------
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports: ["9090:9090"]
+
+  # ---------- Grafana ----------
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana_data:/var/lib/grafana
+      - ./grafana_provisioning:/etc/grafana/provisioning
+    ports: ["3000:3000"]
+    depends_on:
+      - prometheus
+
+  # ---------- Ollama ----------
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports: ["11434:11434"]
+    volumes:
+      - ./ollama_data:/root/.ollama
+
+  # ---------- Reviews API ----------
+  reviews:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/reviews-service?sslmode=disable
+      OLLAMA_URL:   http://ollama:11434
+      OLLAMA_MODEL: qwen:7b-chat
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    ports: ["8080:8080"]
+
+volumes:
+  postgres_data:
+  grafana_data:
+  ollama_data:
